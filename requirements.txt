@@ -1,0 +1,23 @@
+# Core API
+fastapi>=0.103.1
+uvicorn>=0.23.2
+pydantic>=2.4.2
+pydantic-settings>=2.0.3
+python-dotenv>=1.0.0
+
+# LangChain and LLM components
+langchain>=0.0.267
+langgraph>=0.0.20  # Updated to newer version that requires state schema
+langchain-openai>=0.0.5
+langchain-core>=0.0.15
+openai>=1.2.0
+
+# Utilities
+python-multipart>=0.0.6
+typing-extensions>=4.7.1
+loguru>=0.7.0
+starlette>=0.27.0
+
+# Testing
+pytest>=7.4.0
+httpx>=0.24.1
