@@ -40,6 +40,7 @@ class ResumeAnalysisState(TypedDict, total=False):
     status: str
     error: Optional[str]
     complete: bool
+    streaming_enabled: bool  # Flag to enable streaming for specific nodes
 
 def should_continue(state: Dict[str, Any]) -> str:
     """Determine the next node to execute based on state"""
@@ -176,7 +177,7 @@ def build_resume_analysis_graph():
     # Set the entry point
     workflow.set_entry_point("process_text")
     
-    # Create a compiled graph
+    # Create a compiled graph - remove the checkpointing parameter
     return workflow.compile()
 
 def build_question_generation_graph() -> StateGraph:

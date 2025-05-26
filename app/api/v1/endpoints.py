@@ -61,6 +61,89 @@ async def analyze_resume(request: ResumeRequest):
     except Exception as e:
         app_logger.error(f"Error in resume analysis: {e}")
         raise HTTPException(status_code=500, detail=str(e))
+        
+@router.post(
+    "/analyze-resume-with-streaming-summary", 
+    summary="Analyze Resume with Streaming Summary",
+    description="""
+    Analyzes a resume and streams the summary generation in real-time.
+    
+    This endpoint streams the summary generation and then returns the final result.
+    
+    The response uses Server-Sent Events (SSE) format.
+    """
+)
+async def analyze_resume_streaming_summary(request: ResumeRequest):
+    """
+    Analyze a resume and stream the summary generation in real-time
+    """
+    try:
+        # Build the resume analysis graph
+        graph = build_resume_analysis_graph()
+        
+        # Generate a unique ID for tracking
+        tracking_id = generate_checkpoint_id()
+        resume_checkpoint_key = f"resume_text_{tracking_id}"
+        
+        # Initial state with the resume text
+        initial_state = {
+            "resume_text": request.resume_text,
+            "tracking_id": tracking_id,
+            "streaming_enabled": True,  # Flag to enable streaming in specific nodes
+        }
+        
+        # Save the state for potential resumption
+        await save_checkpoint(resume_checkpoint_key, {
+            "resume_text": request.resume_text,
+            "tracking_id": tracking_id,
+        })
+
+        app_logger.info(f"Starting resume analysis with streaming summary (tracking ID: {tracking_id})")
+
+        # Create an async generator that filters for summary node outputs
+        async def stream_summary_generation():
+            # Send initial status
+            yield {"status": "started", "message": "Analysis started"}
+            
+            # Get the LangGraph output stream - use astream_events for intermediate results
+            async for event in graph.astream_events(
+                initial_state, 
+                stream_mode="values",  # Stream node outputs
+            ):
+                # Check if this is from the summary node
+                if "summary_node" in str(event):
+                    node_name = event.get("langgraph_node", "")
+                    state = event.get("value", {})
+                    
+                    if node_name == "summary_node" and isinstance(state, dict):
+                        # Extract the summary text
+                        if state.get("structured_data", {}).get("summary"):
+                            summary = state["structured_data"]["summary"]
+                            yield {
+                                "status": "summary_generating", 
+                                "message": "Generating summary", 
+                                "data": {"partial_summary": summary}
+                            }
+            
+            # After summary is generated, continue with the analysis by resuming from cached state
+            final_result = await graph.ainvoke(initial_state)
+            
+            # Return the complete analysis results
+            yield {
+                "status": "completed",
+                "message": "Analysis complete",
+                "data": {
+                    "structured_data": final_result.get("structured_data", {}),
+                    "insights": final_result.get("insights", {})
+                }
+            }
+                
+        # Return a streaming response
+        return create_streaming_response(stream_summary_generation())
+        
+    except Exception as e:
+        app_logger.error(f"Error in streaming summary analysis: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
 
 @router.post(
     "/analyze-resume-stream",

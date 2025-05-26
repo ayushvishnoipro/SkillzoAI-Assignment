@@ -1,9 +1,9 @@
 """
 Node for generating a professional summary from resume data
 """
-from typing import Dict, Any, Optional
+from typing import Dict, Any, Optional, List, AsyncGenerator
 import asyncio
-from app.services.llm_service import call_llm
+from app.services.llm_service import call_llm, stream_llm_response
 from app.utils.logger import app_logger
 
 async def generate_summary(structured_data: Dict[str, Any]) -> str:
@@ -16,6 +16,9 @@ async def generate_summary(structured_data: Dict[str, Any]) -> str:
     Returns:
         str: Professional summary paragraph
     """
+    # Check if streaming is enabled in the state
+    streaming_enabled = structured_data.get("streaming_enabled", False)
+    
     # Extract relevant information for the summary
     name = structured_data.get("name", "The candidate")
     
@@ -42,7 +45,15 @@ async def generate_summary(structured_data: Dict[str, Any]) -> str:
     """
     
     try:
-        response = await call_llm(prompt)
+        # Use streaming version if requested
+        if streaming_enabled:
+            app_logger.info("Using streaming summary generation")
+            # Get full response as final result for the state
+            response = await call_llm(prompt)
+        else:
+            # Use standard non-streaming call
+            response = await call_llm(prompt)
+            
         # Clean up the response - remove quotes if present and trim
         summary = response.strip()
         if summary.startswith('"') and summary.endswith('"'):
