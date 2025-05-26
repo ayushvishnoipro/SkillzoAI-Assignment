@@ -1,99 +1,76 @@
-from typing import Dict, Any, List
-from app.services.llm_utils import create_structured_output_chain, get_llm
-from app.models.response import ResumeInsights
+"""
+Node for generating professional insights from resume data
+"""
+from typing import Dict, Any, List, Optional
+import asyncio
+from app.services.llm_service import call_llm
+from app.services.parser import extract_json_from_llm_response
 from app.utils.logger import app_logger
 
-INSIGHTS_PROMPT = """
-You are an expert resume analyst and career coach with years of experience evaluating resumes.
-
-Based on the following resume information, provide detailed insights about the candidate's profile,
-including strengths, areas for improvement, key skills, experience level, and industry fit.
-
-Work Experience:
-{work_experience}
-
-Education:
-{education}
-
-Summary:
-{summary}
-
-Additional Information:
-{resume_text}
-
-Analyze this profile thoroughly and provide insights in the following areas:
-1. Strengths (3-5 points)
-2. Areas for improvement (2-3 points)
-3. Key skills (technical and soft skills)
-4. Brief summary of experience level
-5. Career level (Entry, Mid, Senior, Executive)
-6. Industries where this candidate would be a good fit
-"""
-
-async def generate_insights(state: Dict[str, Any]) -> Dict[str, Any]:
+async def generate_insights(structured_data: Dict[str, Any]) -> Dict[str, Any]:
     """
-    Generate insights about the resume
+    Generate professional insights based on the structured resume data
     
     Args:
-        state: Current graph state including extracted resume data
+        structured_data: The structured resume data
         
     Returns:
-        Updated state with resume insights
+        Dict[str, Any]: Insights including strengths, improvement areas, key skills, etc.
     """
-    app_logger.info("Generating resume insights")
+    # Prepare a condensed version of the structured data for the prompt
+    work_experience = "\n".join([
+        f"- {exp.get('position')} at {exp.get('company')} ({exp.get('start_date')} to {exp.get('end_date')}): {exp.get('description', 'No description')}"
+        for exp in structured_data.get("work_experience", [])
+    ])
     
-    # Extract necessary information from state
-    work_experience = state.get("work_experience", [])
-    education = state.get("education", [])
-    summary = state.get("summary", "")
-    cleaned_text = state.get("cleaned_text", "")
+    education = "\n".join([
+        f"- {edu.get('degree')} in {edu.get('field_of_study')} from {edu.get('institution')} ({edu.get('start_date')} to {edu.get('end_date')})"
+        for edu in structured_data.get("education", [])
+    ])
     
-    # Format work experience for the prompt
-    work_exp_text = "\n\n".join([
-        f"{item.position} at {item.company}, {item.start_date} - {item.end_date}\n{item.description}" 
-        for item in work_experience
-    ]) if work_experience else "No work experience provided"
+    # Create the prompt
+    prompt = f"""
+    Analyze the following resume information and provide professional insights. 
+    Include:
+    1. A list of professional strengths (4-5 items)
+    2. Areas for improvement (1-2 items)
+    3. Key skills (both explicit and implicit from experience)
+    4. A brief experience summary (one sentence)
+    5. Career level assessment (Junior, Mid, Senior, Executive)
+    6. Industry fit (3-4 relevant industries)
     
-    # Format education for the prompt
-    education_text = "\n\n".join([
-        f"{item.degree} in {item.field_of_study} from {item.institution}, {item.start_date} - {item.end_date or 'Present'}" 
-        for item in education
-    ]) if education else "No education provided"
+    Format the response as a JSON object with the following keys:
+    - strengths (array of strings)
+    - improvement_areas (array of strings)
+    - key_skills (array of strings)
+    - experience_summary (string)
+    - career_level (string)
+    - industry_fit (array of strings)
+    
+    RESUME INFORMATION:
+    Work Experience:
+    {work_experience}
+    
+    Education:
+    {education}
+    
+    Summary: {structured_data.get("summary", "Not provided")}
+    """
     
     try:
-        # Get LLM with specified temperature first
-        llm = get_llm(temperature=0.4)  # More creative but still professional
-        
-        # Create chain to generate structured insights, passing the LLM instance
-        insights_chain = create_structured_output_chain(
-            INSIGHTS_PROMPT,
-            ResumeInsights,
-            llm=llm  # Pass the configured LLM
-        )
-        
-        # Run the chain to get structured insights
-        input_data = {
-            "work_experience": work_exp_text,
-            "education": education_text,
-            "summary": summary,
-            "resume_text": cleaned_text
-        }
-        
-        insights = await insights_chain.ainvoke(input_data)
-        
-        app_logger.info("Resume insights generated successfully")
-        
-        # Update state with insights
-        return {
-            **state,
-            "insights": insights,
-            "status": "insights_generated"
-        }
+        response = await call_llm(prompt)
+        insights = extract_json_from_llm_response(response)
+        app_logger.info("Generated professional insights")
+        return insights
         
     except Exception as e:
         app_logger.error(f"Error generating insights: {e}")
+        # Return a minimal valid structure
         return {
-            **state,
-            "error": f"Failed to generate insights: {str(e)}",
-            "status": "error"
+            "strengths": [],
+            "improvement_areas": [],
+            "key_skills": [],
+            "experience_summary": "Could not generate experience summary.",
+            "career_level": "Unknown",
+            "industry_fit": []
         }

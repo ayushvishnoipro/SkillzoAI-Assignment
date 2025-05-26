@@ -1,81 +1,55 @@
-from typing import Dict, Any, List
-from app.services.llm_utils import create_structured_output_chain, get_llm
-from app.models.resume import Education
-from app.utils.logger import app_logger
-from pydantic import BaseModel
-
-EDUCATION_PROMPT = """
-You are an AI assistant that specializes in extracting education information from resumes.
-
-Given the following resume text, extract all education entries with as much detail as possible.
-For each education entry, extract:
-1. Institution name
-2. Degree (e.g., Bachelor's, Master's, Ph.D.)
-3. Field of study
-4. Start and end dates
-5. GPA (if available)
-6. Academic achievements or honors
-
-Resume text to analyze:
-{input}
-
-Analyze the text carefully and identify each separate education entry. Be comprehensive and accurate.
 """
+Node for extracting education information from resume text
+"""
+from typing import Dict, Any, List
+import asyncio
+from app.services.llm_service import call_llm
+from app.services.parser import extract_json_from_llm_response
+from app.utils.logger import app_logger
 
-# Updated to use a proper Pydantic model
-class EducationList(BaseModel):
-    """List of education entries"""
-    entries: List[Education] = []
-
-async def extract_education(state: Dict[str, Any]) -> Dict[str, Any]:
+async def extract_education(resume_text: str, structured_data: Dict[str, Any]) -> List[Dict[str, Any]]:
     """
-    Extract education information from resume text
+    Extract education details from resume text
     
     Args:
-        state: Current graph state including resume text
+        resume_text: The raw resume text
+        structured_data: The already extracted structured data
         
     Returns:
-        Updated state with extracted education list
+        List[Dict[str, Any]]: List of education entries
     """
-    app_logger.info("Extracting education information")
+    prompt = f"""
+    Extract detailed education information from the following resume text.
+    For each education entry, extract:
+    - Institution name
+    - Degree (e.g., B.S., M.S., Ph.D.)
+    - Field of study
+    - Start date (year)
+    - End date (year or "Present" if ongoing)
+    - GPA (if available)
+    - Achievements or honors (if any)
     
-    # Get cleaned text and relevant sections
-    cleaned_text = state.get("cleaned_text", "")
-    sections = state.get("sections", {})
+    Format as a JSON array of objects.
     
-    # Focus on education section if available, otherwise use full text
-    text_to_analyze = sections.get("education", cleaned_text)
+    RESUME TEXT:
+    {resume_text}
+    """
     
     try:
-        # Get LLM with appropriate temperature
-        llm = get_llm(temperature=0.2)  # Low temperature for factual extraction
+        response = await call_llm(prompt)
+        education_data = extract_json_from_llm_response(response)
         
-        # Create chain to extract structured education data
-        education_chain = create_structured_output_chain(
-            EDUCATION_PROMPT,
-            EducationList,
-            llm=llm
-        )
+        # Ensure we have a list
+        if not isinstance(education_data, list):
+            if isinstance(education_data, dict) and "education" in education_data:
+                education_data = education_data["education"]
+            else:
+                app_logger.warning("Education extraction didn't return a list or proper dict")
+                return []
         
-        # Run the chain to get structured output
-        result = await education_chain.ainvoke(text_to_analyze)
-        
-        # Access the entries field
-        education_entries = result.entries if hasattr(result, "entries") else []
-        
-        app_logger.info(f"Extracted {len(education_entries)} education entries")
-        
-        # Update the state with extracted education data
-        return {
-            **state,
-            "education": education_entries,
-            "status": "education_extracted"
-        }
+        app_logger.info(f"Extracted {len(education_data)} education entries")
+        return education_data
         
     except Exception as e:
-        app_logger.error(f"Error extracting education information: {e}")
-        return {
-            **state,
-            "error": f"Failed to extract education: {str(e)}",
-            "status": "error"
-        }
+        app_logger.error(f"Error extracting education: {e}")
+        return structured_data.get("education", [])  # Return existing data if available

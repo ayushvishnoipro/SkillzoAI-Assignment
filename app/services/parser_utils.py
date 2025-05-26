@@ -1,113 +1,114 @@
+"""
+Utility functions for parsing resume text
+"""
 import re
-from typing import List, Dict, Any, Optional, Tuple
-from app.utils.logger import app_logger
-from app.services.llm_utils import get_llm
+from typing import Dict, Any, List, Optional
 
-def extract_contact_info(text: str) -> Dict[str, Optional[str]]:
+def clean_resume_text(text: str) -> str:
+    """
+    Clean and normalize resume text
+    
+    Args:
+        text: Raw resume text
+        
+    Returns:
+        str: Cleaned resume text
+    """
+    # Remove excessive whitespace
+    text = re.sub(r'\s+', ' ', text)
+    
+    # Replace multiple newlines with double newlines for better section separation
+    text = re.sub(r'\n{3,}', '\n\n', text)
+    
+    return text.strip()
+
+def extract_contact_info(text: str) -> Dict[str, Any]:
     """
     Extract basic contact information from resume text
+    
+    Args:
+        text: Cleaned resume text
+        
+    Returns:
+        Dict[str, Any]: Dictionary with contact information
     """
+    # Initialize results
     contact_info = {
         "name": None,
         "email": None,
         "phone": None,
-        "location": None
+        "location": None,
     }
     
-    # Email extraction
-    email_pattern = r'\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Z|a-z]{2,}\b'
-    email_match = re.search(email_pattern, text)
+    # Extract email with regex
+    email_match = re.search(r'\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Z|a-z]{2,}\b', text)
     if email_match:
-        contact_info["email"] = email_match.group()
+        contact_info["email"] = email_match.group(0)
     
-    # Phone extraction
-    phone_pattern = r'\b(?:\+\d{1,3}[-.\s]?)?\(?(?:\d{3})?\)?[-.\s]?\d{3}[-.\s]?\d{4}\b'
-    phone_match = re.search(phone_pattern, text)
+    # Extract phone with regex
+    phone_match = re.search(r'\b(?:\+\d{1,2}\s?)?(?:\(?\d{3}\)?[\s.-]?)?\d{3}[\s.-]?\d{4}\b', text)
     if phone_match:
-        contact_info["phone"] = phone_match.group()
+        contact_info["phone"] = phone_match.group(0)
     
-    # Name and location often require LLM extraction, which is done in more complex nodes
+    # Extract name (naive approach - first line often contains the name)
+    lines = text.strip().split('\n')
+    if lines:
+        potential_name = lines[0].strip()
+        # Check if the first line is a name (no special chars, not too long)
+        if len(potential_name) > 0 and len(potential_name) < 50 and not re.search(r'[@:/]', potential_name):
+            contact_info["name"] = potential_name
     
     return contact_info
 
 def extract_sections(text: str) -> Dict[str, str]:
     """
-    Attempt to extract common resume sections
+    Extract major sections from the resume text
+    
+    Args:
+        text: Cleaned resume text
+        
+    Returns:
+        Dict[str, str]: Dictionary mapping section names to their content
     """
+    # Common section headers
+    section_patterns = [
+        r'\b(WORK\s+EXPERIENCE|EXPERIENCE|EMPLOYMENT|PROFESSIONAL\s+EXPERIENCE)\b',
+        r'\b(EDUCATION|ACADEMIC\s+BACKGROUND|QUALIFICATIONS)\b',
+        r'\b(SKILLS|TECHNICAL\s+SKILLS|COMPETENCIES)\b',
+        r'\b(PROJECTS)\b',
+        r'\b(CERTIFICATIONS|CERTIFICATES)\b',
+        r'\b(LANGUAGES)\b',
+        r'\b(PUBLICATIONS)\b',
+        r'\b(INTERESTS|HOBBIES)\b'
+    ]
+    
     sections = {}
+    current_section = "HEADER"
+    section_content = []
     
-    # Common section headers (case-insensitive)
-    section_patterns = {
-        "summary": r'(?i)(Summary|Professional Summary|Profile|Objective)[\s]*:',
-        "experience": r'(?i)(Experience|Work Experience|Employment History|Professional Experience)[\s]*:',
-        "education": r'(?i)(Education|Educational Background|Academic History)[\s]*:',
-        "skills": r'(?i)(Skills|Technical Skills|Core Competencies|Key Skills)[\s]*:',
-        "certifications": r'(?i)(Certifications|Professional Certifications|Certificates)[\s]*:',
-        "projects": r'(?i)(Projects|Personal Projects|Professional Projects)[\s]*:'
-    }
-    
-    # Find the positions of all section headers
-    section_positions = {}
-    for section_name, pattern in section_patterns.items():
-        match = re.search(pattern, text)
-        if match:
-            section_positions[section_name] = match.start()
-    
-    # Sort the sections by position
-    sorted_sections = sorted(section_positions.items(), key=lambda x: x[1])
-    
-    # Extract text for each section
-    for i, (section_name, pos) in enumerate(sorted_sections):
-        start_pos = pos
+    # Process line by line
+    lines = text.split('\n')
+    for line in lines:
+        # Check if line is a section header
+        is_section_header = False
+        for pattern in section_patterns:
+            if re.search(pattern, line, re.IGNORECASE):
+                # Save the current section if there is one
+                if current_section:
+                    sections[current_section] = '\n'.join(section_content).strip()
+                
+                # Start a new section
+                current_section = line.strip()
+                section_content = []
+                is_section_header = True
+                break
         
-        # End position is the start of the next section or end of text
-        if i < len(sorted_sections) - 1:
-            end_pos = sorted_sections[i + 1][1]
-        else:
-            end_pos = len(text)
-        
-        sections[section_name] = text[start_pos:end_pos].strip()
+        # If not a header, add to current section
+        if not is_section_header:
+            section_content.append(line)
+    
+    # Add the last section
+    if current_section and section_content:
+        sections[current_section] = '\n'.join(section_content).strip()
     
     return sections
-
-def clean_resume_text(text: str) -> str:
-    """
-    Clean and normalize resume text
-    """
-    # Replace multiple newlines with a single newline
-    cleaned = re.sub(r'\n{3,}', '\n\n', text)
-    
-    # Replace multiple spaces with a single space
-    cleaned = re.sub(r' {2,}', ' ', cleaned)
-    
-    # Replace Unicode characters with ASCII equivalents
-    cleaned = cleaned.replace('•', '* ')
-    cleaned = cleaned.replace('–', '-')
-    cleaned = cleaned.replace('—', '-')
-    cleaned = cleaned.replace('"', '"')
-    cleaned = cleaned.replace('"', '"')
-    cleaned = cleaned.replace(''', "'")
-    cleaned = cleaned.replace(''', "'")
-    
-    return cleaned.strip()
-
-async def extract_dates(text: str) -> List[Tuple[str, str]]:
-    """
-    Extract date ranges from text using regex
-    Returns a list of (start_date, end_date) tuples
-    """
-    # Common date formats in resumes
-    date_pattern = r'(?i)(Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec|January|February|March|April|May|June|July|August|September|October|November|December)[a-z.]*\s+\d{4}\s*(?:-|–|to)\s*(Present|Current|Now|Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec|January|February|March|April|May|June|July|August|September|October|November|December)[a-z.]*\s*\d{0,4}'
-    
-    date_ranges = []
-    matches = re.finditer(date_pattern, text)
-    
-    for match in matches:
-        date_range = match.group(0)
-        parts = re.split(r'(?:-|–|to)', date_range)
-        if len(parts) == 2:
-            start_date = parts[0].strip()
-            end_date = parts[1].strip()
-            date_ranges.append((start_date, end_date))
-    
-    return date_ranges

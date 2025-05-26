@@ -1,81 +1,55 @@
-from typing import Dict, Any, List
-from app.services.llm_utils import create_structured_output_chain, get_llm
-from app.models.resume import WorkExperience
-from app.utils.logger import app_logger
-from pydantic import BaseModel
-
-WORK_EXPERIENCE_PROMPT = """
-You are a professional resume parser specialized in extracting structured work experience data.
-
-Given the following resume text, extract all work experiences with as much detail as possible.
-For each position, extract:
-1. Company name
-2. Job title/position
-3. Start and end dates (use 'Present' if current)
-4. Job description/responsibilities
-5. Key skills demonstrated
-6. Notable achievements (with metrics if available)
-
-Resume text to analyze:
-{input}
-
-Analyze the text carefully and identify each separate work experience. Be comprehensive and accurate.
 """
+Node for extracting work experience from resume text
+"""
+from typing import Dict, Any, List
+import asyncio
+from app.services.llm_service import call_llm
+from app.services.parser import extract_json_from_llm_response
+from app.utils.logger import app_logger
 
-# Updated to use a proper Pydantic model
-class WorkExperienceList(BaseModel):
-    """List of work experience entries"""
-    entries: List[WorkExperience] = []
-
-async def extract_work_experience(state: Dict[str, Any]) -> Dict[str, Any]:
+async def extract_work_experience(resume_text: str, structured_data: Dict[str, Any]) -> List[Dict[str, Any]]:
     """
-    Extract work experience from resume text
+    Extract work experience details from resume text
     
     Args:
-        state: Current graph state including resume text
+        resume_text: The raw resume text
+        structured_data: The already extracted structured data
         
     Returns:
-        Updated state with extracted work experience list
+        List[Dict[str, Any]]: List of work experience entries
     """
-    app_logger.info("Extracting work experience")
+    prompt = f"""
+    Extract detailed work experience information from the following resume text.
+    For each work experience entry, extract:
+    - Company name
+    - Position/title
+    - Start date (formatted as YYYY-MM if available)
+    - End date (formatted as YYYY-MM or "Present" if current)
+    - Description
+    - Skills used (extracted from descriptions)
+    - Achievements (if any)
     
-    # Get cleaned text and relevant sections
-    cleaned_text = state.get("cleaned_text", "")
-    sections = state.get("sections", {})
+    Format as a JSON array of objects.
     
-    # Focus on experience section if available, otherwise use full text
-    text_to_analyze = sections.get("experience", cleaned_text)
+    RESUME TEXT:
+    {resume_text}
+    """
     
     try:
-        # Get LLM with appropriate temperature
-        llm = get_llm(temperature=0.2)  # Low temperature for factual extraction
+        response = await call_llm(prompt)
+        work_data = extract_json_from_llm_response(response)
         
-        # Create chain to extract structured work experience
-        work_exp_chain = create_structured_output_chain(
-            WORK_EXPERIENCE_PROMPT,
-            WorkExperienceList,
-            llm=llm
-        )
+        # Ensure we have a list
+        if not isinstance(work_data, list):
+            if isinstance(work_data, dict) and "work_experience" in work_data:
+                work_data = work_data["work_experience"]
+            else:
+                app_logger.warning("Work experience extraction didn't return a list or proper dict")
+                return []
         
-        # Run the chain to get structured output
-        result = await work_exp_chain.ainvoke(text_to_analyze)
-        
-        # Access the entries field
-        work_experience_entries = result.entries if hasattr(result, "entries") else []
-        
-        app_logger.info(f"Extracted {len(work_experience_entries)} work experiences")
-        
-        # Update the state with extracted work experience
-        return {
-            **state,
-            "work_experience": work_experience_entries,
-            "status": "work_experience_extracted"
-        }
+        app_logger.info(f"Extracted {len(work_data)} work experience entries")
+        return work_data
         
     except Exception as e:
         app_logger.error(f"Error extracting work experience: {e}")
-        return {
-            **state,
-            "error": f"Failed to extract work experience: {str(e)}",
-            "status": "error"
-        }
+        return structured_data.get("work_experience", [])  # Return existing data if available
